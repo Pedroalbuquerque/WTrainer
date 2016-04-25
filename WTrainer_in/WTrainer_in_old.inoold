@@ -1,0 +1,302 @@
+#include <Arduino.h>
+
+/* Arduino Wireless RC Trainning cable
+* Copyright (C) 2016 by Pedro Albuquerque
+*
+*
+* This file is part of the Arduino PATinySPI Library. This library is for
+* Winbond NOR flash memory modules. In its current form it enables reading
+* and writing individual data variables, structs and arrays from and to various locations;
+* reading and writing pages; continuous read functions; sector, block and chip erase;
+* suspending and resuming programming/erase and powering down for low power operation.
+*
+* This Library is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This Library is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License v3.0
+* along with the Arduino PATinySPI Library.  If not, see
+* <http://www.gnu.org/licenses/>.
+*/
+/*
+
+Code tobe used in a wireless trainner cable built with Moteino board
+
+Wtrainer_in will receive a hardware PPM signal on pin 3 (PPMIN_PIN 3)
+decode 10 channels (PPM_numChn 10)
+and send the duration (in miliseconds) of each channel
+by radio (moteino)within an array of integers
+*/
+
+
+/*
+ * Version 0.1 -concept proof
+ * by Pedro Albuquerque
+ * 2016.03.01
+ */
+
+#define SEND_RADIO
+//#define DEBUG
+
+#include <SPI.h>
+#include <RFM69.h>
+
+
+//Defining some Radio stuff
+#define PPMSTUDENTID      2    //unique for each node on same network
+#define NETWORKID   400  //the same on all nodes that talk to each other
+#define PPMTRAINERID   1
+#define FREQUENCY   RF69_433MHZ//Match frequency to the hardware version of the radio on your Moteino
+#define ENCRYPTKEY  "sampleEncryptKey" //exactly the same 16 characters/bytes on all nodes!
+#define IS_RFM69HW  //uncomment only for RFM69HW! Leave out if you have RFM69W!
+#define ACK_TIME    5 // max # of ms to wait for an ack
+#define LED           9 // Moteinos hsave LEDs on D9
+
+
+#define SERIAL_BAUD 115200
+
+#define PPMIN_PIN 3
+#define MULTIPLIER (F_CPU/8000000)
+#define PPM_numChn 8
+#define default_servo_value 1500
+#define PWM_MINCHANGE 4
+
+RFM69 radio; //Initialize the radio
+bool promiscuousMode = false; //set to 'true' to sniff all packets on the same network
+
+#define FB_pin 4 // pin to debug ISR response, will go HIGH on raise and LOW on fall
+bool state = LOW;
+
+ // value in microseconds [1000-2000] of each channel after decoding
+
+struct WIRELESSPPM
+{
+  int PWM[PPM_numChn]; // value in microseconds [1000-2000] of each channel after decoding
+  int DIF[PPM_numChn]; // diference since last change in milisenconds [1000-2000]
+};
+
+WIRELESSPPM ppm, lastPPM; // value in microseconds [1000-2000] of each channel after decoding
+
+#define LED 9
+
+long timer;
+volatile byte channelREAD = 0;
+unsigned int radioRefresh = 50;
+
+
+void setup()
+{
+  #ifdef SEND_RADIO
+    //Initialize the radio
+    radio.initialize(FREQUENCY, PPMSTUDENTID, NETWORKID); //Initialize the radio
+    #ifdef IS_RFM69HW
+      radio.setHighPower(); //only for RFM69HW!
+    #endif
+    //radio.encrypt(ENCRYPTKEY);//Turn the radio Encryption ON
+    radio.promiscuous(promiscuousMode);//Turn the radio Promiscuous mode according to what in the promiscuousMode variable
+  #endif
+
+
+  Serial.begin(SERIAL_BAUD);
+  Serial.println("Wireless Trainner Cable IN");
+  Serial.println("MAC version");
+
+
+  //initiallize default ppm values
+  for (int i = 0; i<PPM_numChn; i++)
+  {
+    ppm.PWM[i] = default_servo_value;
+   Serial.print(i);Serial.print(" ");Serial.println(ppm.PWM[i]);
+  }
+  lastPPM = ppm;
+
+  pinMode(PPMIN_PIN, INPUT);            // define pin input for ppm
+//  attachInterrupt(digitalPinToInterrupt(PPMIN_PIN), readPPM, CHANGE); // activate interrupt on that pin
+  attachInterrupt(digitalPinToInterrupt(PPMIN_PIN), readPPM, FALLING); // activate interrupt on that pin
+
+  // set timer1 (16bits)
+  TCCR1A = 0;  //reset timer1
+  TCCR1B = 0;
+  TCCR1B |= (1 << CS11);  //set timer1 to increment every 0,5 us (clock /8)
+
+  pinMode(LED, OUTPUT);
+  pinMode(FB_pin, OUTPUT); // pin to give feedback on ISR response
+  digitalWrite(FB_pin, state); // set it low to star with
+
+  timer = millis(); // initialize timer var
+
+}
+
+void loop()
+{
+  char str[100];
+
+  static boolean LED_blink = true;
+  static long LED_timer;
+  int LED_duration = 200; // on for 200 ms and then offto show its alive
+  static boolean LED_on = false;
+
+  // Serial port feedback code to debug when  channel is received
+
+  if (channelREAD != 0)
+  {
+    //Serial.println("*");
+    static int i;
+    i = channelREAD - 1;
+    channelREAD = 0;  //reset flag
+   // only update ppm values if they change more than PWM_MINCHNAGE to avoid noise
+    
+    if (abs(lastPPM.PWM[i] - ppm.PWM[i]) >= PWM_MINCHANGE)
+    {
+      Serial.print("ch:"); Serial.print(i);
+      Serial.print("\t old:"); Serial.print(lastPPM.PWM[i]);
+      Serial.print("\t new:"); Serial.println(ppm.PWM[i]);
+      Serial.print("dif:"); Serial.println(lastPPM.PWM[i] - ppm.PWM[i]);
+      lastPPM.PWM[i]= ppm.PWM[i];
+    }
+    
+//    Serial.println("after str copy");
+//    Serial.print("\t old:"); Serial.print(lastPPM.PWM[i]);
+//    Serial.print("\t new:"); Serial.println(ppm.PWM[i]);
+
+  }
+
+  // hardware feedback(FB) code on PWM received
+
+  digitalWrite(FB_pin, state);
+
+
+  // LED feedback code to confirm software is runing
+
+  if(LED_timer > millis()) LED_timer = millis();
+
+  if(LED_on)
+    {
+      if(millis()-LED_timer > LED_duration)
+      {
+        LED_timer = millis();
+        pinMode(LED, OUTPUT);
+        digitalWrite(LED,HIGH);
+        LED_on= false;
+        //Serial.println("LED_ON");
+      }
+
+    }
+   else
+   {
+    if(millis()-LED_timer > LED_duration)
+    {
+        LED_timer = millis();
+        pinMode(LED, OUTPUT);
+        digitalWrite(LED,LOW);
+        LED_on= true;
+        //Serial.println("LED_OFF");
+
+    }
+
+  }
+
+  // send to Radio code only send on limited interval (radioRefresh)to limit redundancy
+
+  if (timer > millis()) timer = millis();
+
+  if (millis() - timer > radioRefresh ) // 33Hz as each frame should have arround 22.5ms so no point in sending sooner
+  {
+#ifdef SEND_RADIO
+    timer = millis();
+    radio.sendWithRetry(PPMTRAINERID, (const void*)(&lastPPM), sizeof(lastPPM), 1, ACK_TIME);
+    //radio.send(PPMTRAINERID, (const void*)(&lastPPM), sizeof(lastPPM),false);
+    //Serial.println("sent");
+
+#endif
+
+  }
+
+
+
+}
+
+void switchState( )
+{
+  state = !state;
+}
+
+void readPPM()
+{
+  static unsigned int pulse;
+  static unsigned int PWM_len;
+  static unsigned long counter;
+  static byte channel;        // for 8 channel system
+  static byte phase;
+  bool PPMPinLevel;
+  
+  counter = TCNT1;  // record how many cycle have passed since last timer reset
+            // TCNT1 is the timer internal count register incremented
+            // every CPU clock cycle divide by 8 (TCCR1B divider = 8)
+            // so will increment every 8 cycles on a 16MHhz CPU = 0.5us
+  PWM_len = (unsigned) counter/MULTIPLIER;
+  TCNT1 = 0;      // reset timer
+
+  //PPMPinLevel = digitalRead(PPMIN_PIN);
+  
+
+  /*if (counter < 500 * MULTIPLIER)  //must be a pulse if less than 500us
+  {
+    //if(phase == 3) UDR0='3'; else UDR0='2';
+    phase = 1;
+    pulse = counter;
+  }
+  else if (counter > 2500 * MULTIPLIER) //sync pulses over 1910us
+  */
+  if (PWM_len > 2500 ) //sync pulses over 1910us
+  {
+    phase = 3;
+    //Serial.println(channel);
+    channel = 0;
+
+    // switch FB_pin on every imput pin change
+    switchState();
+    //state = HIGH;
+  }
+  //servo values between 300us and 2500us will end up here
+  else   // only count pulse width on falling edge
+  {
+    phase = 2;
+
+    if(channel == 0) switchState();
+    //state = LOW;
+    
+    /*
+    // unexpected channel debug code
+    if (channel - PPM_numChn >0)
+    {
+
+      Serial.print("channel:");Serial.println(channel);
+      Serial.print("PWM:");Serial.println(ppm.PWM[channel]);
+    }
+    else  // for expected channel, save value to array
+    
+    {
+      //ppm.PWM[channel] = (counter + pulse) / MULTIPLIER;
+      ppm.PWM[channel] = (counter) / MULTIPLIER;
+    }
+    */
+    
+    //if (abs(lastPPM.PWM[channel] - ppm.PWM[channel]) > PWM_MINCHANGE)
+    //{
+      channelREAD = channel + 1;
+    //  lastPPM = ppm;
+    //}
+
+    channel++;
+  }
+
+
+  return;
+}
