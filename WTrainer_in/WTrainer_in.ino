@@ -91,7 +91,7 @@ WIRELESSPPM ppm, lastPPM; // value in microseconds [1000-2000] of each channel a
 
 long timer;
 volatile byte channelREAD = 0;
-unsigned int radioRefresh = 30;
+unsigned int radioRefresh = 15;   // time (ms) between radio packet send
 
 
 // ********  DEBUG vars *****
@@ -100,6 +100,9 @@ bool DB_TXstate = LOW;
 
 #define DB_ISRpin 5 // pin to give feedback about ISR status routine
 bool DB_ISRstatus = LOW;
+
+#define DB_CHRDpin 6 // pin to debug if channels are being read
+bool DB_CHRDstatus = LOW;
 
 byte DB_ch = 0;  // channel to debug to be read from Serial port during execution
 
@@ -149,11 +152,17 @@ Serial.println("Wireless Trainner Cable IN");
   // DB_ISRpin used to debug. may vary along deveopment phase
   
   pinMode(LED, OUTPUT);
-  pinMode(DB_TXpin, OUTPUT); // pin to give feedback on ISR response
+
+
+  // initialize DEBUG pins
+  pinMode(DB_TXpin, OUTPUT); // pin to give feedback on RF transmite time 
   digitalWrite(DB_TXpin, DB_TXstate); // set it low to star with
 
   pinMode(DB_ISRpin,OUTPUT); // pin to give ISR status feedback
   digitalWrite(DB_ISRpin,LOW);
+
+  pinMode(DB_CHRDpin,OUTPUT);
+  digitalWrite(DB_CHRDpin,LOW);
 
   
   timer = millis(); // initialize timer var
@@ -206,7 +215,6 @@ void loop()
         pinMode(LED, OUTPUT);
         digitalWrite(LED,HIGH);
         LED_on= false;
-        //Serial.println("LED_ON");
       }
 
     }
@@ -218,8 +226,6 @@ void loop()
         pinMode(LED, OUTPUT);
         digitalWrite(LED,LOW);
         LED_on= true;
-        //Serial.println("LED_OFF");
-
     }
 
   }
@@ -238,7 +244,6 @@ void loop()
     
     //radio.sendWithRetry(PPMTRAINERID, (const void*)(&lastPPM), sizeof(lastPPM), 1, ACK_TIME); // takes 20ms to transmit
     radio.send(PPMTRAINERID, (const void*)(&lastPPM), sizeof(lastPPM),false); // takes 5ms to transmit
-
     // although loop is stoped, ISR is still reading and saving PPM received value
     digitalWrite(DB_TXpin, LOW);
 
@@ -263,8 +268,16 @@ void readPPM()
             // TCNT1 is the timer internal count register incremented
             // every CPU clock cycle divide by 8 (TCCR1B divider = 8)
             // so will increment every 8 cycles on a 16MHhz CPU = 0.5us
-  PWM_len = (unsigned) counter/MULTIPLIER;
+            
+  PWM_len = (unsigned) counter/MULTIPLIER; // convert counter do us
   TCNT1 = 0;      // reset timer
+
+    // debug if passing this point echo on DB_CHRDpinn
+    //switchState(&DB_CHRDstatus); 
+    //digitalWrite(DB_CHRDpin,DB_CHRDstatus);
+    //Serial.print("*");
+
+
 
   if (PWM_len > 2500 ) //sync pulses over 1910us
   {
@@ -272,11 +285,13 @@ void readPPM()
 
     // switch DB_TXpin on every input pin change
     switchState(&DB_TXstate);
+
+  
   }
   //servo values between 0us and 2500us will end up here
   else   // only count pulse width on falling edge
   {
-
+    
     if(channel == 0) switchState(&DB_TXstate);
     
     // unexpected channel debug code 
@@ -288,13 +303,14 @@ void readPPM()
     }
     else  // for expected channel, save value to array 
     {
-      ppm.PWM[channel] = (counter) / MULTIPLIER;
+      ppm.PWM[channel] = PWM_len;
     }
         
     channelREAD = channel + 1;
     lastPPM = ppm;
 
     channel++;
+    
   }
   return; // return from readPPM() (ISR routine)
 }

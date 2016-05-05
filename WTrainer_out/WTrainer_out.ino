@@ -34,7 +34,7 @@ Code to be used in a wireless trainner cable built with Moteino board
 
 Wtrainer_out will receive set of channel duration by radio (Moteino)
 the set is in an array of int with each channel duration (in miliseconds)
-a hardware PPM signal is generated on pin 3 (PPM_PIN 4 ) for the 10 channels (PPM_numChn 10)
+a hardware PPM signal is generated on pin 4 (PPM_PIN 4 ) for the 8 channels (PPM_numChn 8)
 PPM signalpolarity can be set  positive or negatve (onState 0 )
 */
 
@@ -46,7 +46,7 @@ PPM signalpolarity can be set  positive or negatve (onState 0 )
  */
 
 
-//#define DEBUG
+#define DEBUG
 
 #include <SPI.h>
 
@@ -60,7 +60,7 @@ PPM signalpolarity can be set  positive or negatve (onState 0 )
 #define onState 0  //set polarity of the pulses: 1 is positive, 0 is negative
 #define multiplier (F_CPU/8000000)
 
-#define PPM_PIN 4  //set PPM signal output pin on the arduino
+#define PPM_PIN 3  //set PPM signal output pin on the arduino
 #define BUZZER 5 // pin connected to a buzzer
 
 #define Radio_failsafe 1000 // timeout failsafe duration (milisecond)
@@ -97,7 +97,7 @@ void setup()
 
   //Radio Setup
   radio.initialize(FREQUENCY, PPMTRAINERID, NETWORKID); //Initialize the radio
-  radio.setHighPower();// only for RFM69HW
+  //radio.setHighPower();// only for RFM69HW
 
   // radio.encrypt(ENCRYPTKEY);//Turn the radio Encryption ON
   radio.promiscuous(promiscuousMode);//Set Promiscuous mode according to what's in the promiscuousMode variable
@@ -216,7 +216,7 @@ void loop()
       Serial.print("*********      Failsafe!  ********");
       Serial.print("mil:"); Serial.println(millis());
       Serial.print("timer:"); Serial.println(timer);
-      Serial.print("Bad len:"); Serial.println(radio.PAYLOADLEN);
+      Serial.print("Bad len:"); Serial.println(radio.DATALEN);
       Serial.print(sizeof(ppm)); Serial.println(" no radio received!");
       #endif
 
