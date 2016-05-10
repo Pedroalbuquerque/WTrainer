@@ -95,17 +95,18 @@ unsigned int radioRefresh = 15;   // time (ms) between radio packet send
 
 
 // ********  DEBUG vars *****
-#define DB_TXpin 4 // pin to debug transmiter time
+#define DB_TXpin 4 // pin to debug transmiter time, ON on start transmit OFF on end
 bool DB_TXstate = LOW;
 
-#define DB_ISRpin 5 // pin to give feedback about ISR status routine
+#define DB_ISRpin 5 // pin to give feedback about ISR status routine with PWM of selected channel (ch=0 by default)
 bool DB_ISRstatus = LOW;
+byte DB_ch = 0;  // channel to debug to be read from Serial port during execution
+
 
 #define DB_CHRDpin 6 // pin to debug if channels are being read
 bool DB_CHRDstatus = LOW;
 
-byte DB_ch = 0;  // channel to debug to be read from Serial port during execution
-
+#define DB_SEpin 7 // pin to debug Start and End of some code (radio send)
 
 
 
@@ -113,6 +114,7 @@ byte DB_ch = 0;  // channel to debug to be read from Serial port during executio
 void setup()
 {
   #ifdef SEND_RADIO
+       
     //Initialize the radio
     radio.initialize(FREQUENCY, PPMSTUDENTID, NETWORKID); //Initialize the radio
     #ifdef IS_RFM69HW
@@ -136,14 +138,25 @@ Serial.println("Wireless Trainner Cable IN");
   lastPPM = ppm;
 
 
-  // prepare input pin for PPM as input and attach interrupt routine
-  pinMode(PPMIN_PIN, INPUT);            // define pin input for ppm
-  attachInterrupt(digitalPinToInterrupt(PPMIN_PIN), readPPM, FALLING); // activate interrupt on that pin
+  cli(); // disable all interrups for a moment
 
   // set timer1 (16bits) to measure PPM channel values
   TCCR1A = 0;  //reset timer1
+  TCNT1 = 0;      // reset timer
+
   TCCR1B = 0;
   TCCR1B |= (1 << CS11);  //set timer1 to increment every 0,5 us (clock /8)
+ 
+ // enable Timer1 overflow interrupt:
+   //TIMSK1 |= (1 << TOIE1); //Atmega8 has no TIMSK1 but a TIMSK register
+
+  sei(); // enable again any interrupts
+
+
+  // prepare input pin for PPM as input and attach interrupt routine
+  pinMode(PPMIN_PIN, INPUT_PULLUP);            // define pin input for ppm
+  attachInterrupt(digitalPinToInterrupt(PPMIN_PIN), readPPM, FALLING); // activate interrupt on that pin
+
 
   
   // prepare hardware feedback pin
@@ -164,6 +177,8 @@ Serial.println("Wireless Trainner Cable IN");
   pinMode(DB_CHRDpin,OUTPUT);
   digitalWrite(DB_CHRDpin,LOW);
 
+  pinMode(DB_SEpin,OUTPUT);
+  digitalWrite(DB_SEpin,LOW);
   
   timer = millis(); // initialize timer var
 
@@ -263,7 +278,9 @@ void readPPM()
   static unsigned int PWM_len;
   static unsigned int counter;
   static byte channel;        // for 8 channel system
-    
+
+  cli();  // disable ALL interrupts for a moment
+  
   counter = TCNT1;  // record how many cycle have passed since last timer reset
             // TCNT1 is the timer internal count register incremented
             // every CPU clock cycle divide by 8 (TCCR1B divider = 8)
@@ -273,10 +290,11 @@ void readPPM()
   TCNT1 = 0;      // reset timer
 
     // debug if passing this point echo on DB_CHRDpinn
-    //switchState(&DB_CHRDstatus); 
-    //digitalWrite(DB_CHRDpin,DB_CHRDstatus);
+    switchState(&DB_CHRDstatus); 
+    digitalWrite(DB_CHRDpin,DB_CHRDstatus);
     //Serial.print("*");
 
+    //digitalWrite(DB_SEpin,HIGH);
 
 
   if (PWM_len > 2500 ) //sync pulses over 1910us
@@ -312,5 +330,10 @@ void readPPM()
     channel++;
     
   }
+  
+  sei();  // enable ALL interrupts that are active
+
+  //digitalWrite(DB_SEpin,LOW);
+
   return; // return from readPPM() (ISR routine)
 }
