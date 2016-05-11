@@ -46,7 +46,7 @@ PPM signalpolarity can be set  positive or negatve (onState 0 )
  */
 
 
-#define DEBUG
+//#define DEBUG
 
 #include <SPI.h>
 

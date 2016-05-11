@@ -51,7 +51,7 @@ by radio (moteino) within an array of integers
 
 // compile option
 #define SEND_RADIO
-
+#define DEBUG
 
 
 //Defining some Radio stuff
@@ -69,7 +69,7 @@ by radio (moteino) within an array of integers
 
 #define PPMIN_PIN 3
 #define MULTIPLIER (F_CPU/8000000)
-#define PPM_numChn 8
+#define PPM_numChn 8 // [0 - 7]
 #define default_servo_value 1500
 
 RFM69 radio; //Initialize the radio
@@ -89,9 +89,25 @@ WIRELESSPPM ppm, lastPPM; // value in microseconds [1000-2000] of each channel a
 
 #define LED 9
 
-long timer;
-volatile byte channelREAD = 0;
-unsigned int radioRefresh = 15;   // time (ms) between radio packet send
+
+// loop() control variables
+
+  unsigned int radioRefresh = 15;   // time (ms) between radio packet send
+  int LED_duration = 200; // on for 200 ms and then off to show its alive
+
+  static long RADIO_timer;
+  static long LED_timer;
+  static boolean LED_on = false;
+
+  char str_USBcmd = '0';
+  static unsigned int  analogPWM = 0;
+
+// ISR routine vars
+volatile  unsigned int PWM_len;
+volatile  unsigned int counter;
+volatile  byte channel;        // for 8 channel system
+
+
 
 
 // ********  DEBUG vars *****
@@ -112,6 +128,8 @@ byte DB_ch = 0;  // channel to debug to be read from Serial port during executio
 
 void setup()
 {
+
+ 
   #ifdef SEND_RADIO
     //Initialize the radio
     radio.initialize(FREQUENCY, PPMSTUDENTID, NETWORKID); //Initialize the radio
@@ -124,7 +142,7 @@ void setup()
 
 
   Serial.begin(SERIAL_BAUD);
-Serial.println("Wireless Trainner Cable IN");
+  Serial.println("Wireless Trainner Cable IN");
 
 
   //initiallize default ppm values
@@ -136,14 +154,28 @@ Serial.println("Wireless Trainner Cable IN");
   lastPPM = ppm;
 
 
+  /// Set timer 1 register to increment on every 0.5us but NO INTERRUPT generated
+  /// TCNT1 will hold the counting as soon as timer1 is enabled via TCCR1B set to 8 
+
+  TIMSK1 = 0; // disable timer 1 interrupt
+
+  // set timer1 (16bits) to measure PPM channel values
+  TCCR1A = 0;  //Stop timer1
+  TCCR1B = 0;
+  TCNT1 = 0;      // reset timer1 counter to 0
+
+  // enable timer 1
+  TCCR1B |= (1 << CS11);  //set timer1 to increment every 0,5 us (clock /8)
+
+   
+   // enable Timer1 overflow interrupt:
+   //TIMSK1 |= (1 << TOIE1); //Atmega8 has no TIMSK1 but a TIMSK register
+
+
   // prepare input pin for PPM as input and attach interrupt routine
   pinMode(PPMIN_PIN, INPUT);            // define pin input for ppm
   attachInterrupt(digitalPinToInterrupt(PPMIN_PIN), readPPM, FALLING); // activate interrupt on that pin
 
-  // set timer1 (16bits) to measure PPM channel values
-  TCCR1A = 0;  //reset timer1
-  TCCR1B = 0;
-  TCCR1B |= (1 << CS11);  //set timer1 to increment every 0,5 us (clock /8)
 
   
   // prepare hardware feedback pin
@@ -165,24 +197,14 @@ Serial.println("Wireless Trainner Cable IN");
   digitalWrite(DB_CHRDpin,LOW);
 
   
-  timer = millis(); // initialize timer var
+  RADIO_timer= millis(); // initialize RADIO_timervar
 
 }
 
 void loop()
 {
-  //char str[100];
 
-  static boolean LED_blink = true;
-  static long LED_timer;
-  int LED_duration = 200; // on for 200 ms and then off to show its alive
-  static boolean LED_on = false;
-
-
-  // ******** DEBUG specific channel
-  char str_USBcmd = '0';
-  static unsigned int  analogPWM = 0;
-
+#ifdef DEBUG    
   if(Serial.available())
   {
     str_USBcmd = Serial.read();
@@ -201,53 +223,40 @@ void loop()
 
   analogPWM= (unsigned)(lastPPM.PWM[DB_ch]-950)/4 ; // convert PWM [1000-2000] to [0-256]
   analogWrite(DB_ISRpin, analogPWM);
-  
-
+#endif
+ 
   // LED feedback code to confirm software is runing
 
   if(LED_timer > millis()) LED_timer = millis();
-
-  if(LED_on)
+  if(millis()-LED_timer > LED_duration)
     {
-      if(millis()-LED_timer > LED_duration)
-      {
-        LED_timer = millis();
-        pinMode(LED, OUTPUT);
-        digitalWrite(LED,HIGH);
-        LED_on= false;
-      }
-
+      LED_timer = millis();
+      switchState(&LED_on); 
+      digitalWrite(LED,LED_on); 
+      
     }
-   else
-   {
-    if(millis()-LED_timer > LED_duration)
-    {
-        LED_timer = millis();
-        pinMode(LED, OUTPUT);
-        digitalWrite(LED,LOW);
-        LED_on= true;
-    }
-
-  }
-
   // send to Radio code only send on limited interval (radioRefresh)to limit redundancy
 
-  if (timer > millis()) timer = millis();
+  if (RADIO_timer> millis()) RADIO_timer= millis();
   
-  if (millis() - timer > radioRefresh ) // 33Hz as each frame should have arround 22.5ms so no point in sending sooner
+  if (millis() - RADIO_timer> radioRefresh ) // 33Hz as each frame should have arround 22.5ms so no point in sending sooner
   {
-#ifdef SEND_RADIO
-    timer = millis();
+    #ifdef SEND_RADIO
+    RADIO_timer= millis();
 
+    #ifdef DEBUG
     // hardware feedback(FB) on pin FB_TXpin received
     digitalWrite(DB_TXpin, HIGH);
+    #endif
     
     //radio.sendWithRetry(PPMTRAINERID, (const void*)(&lastPPM), sizeof(lastPPM), 1, ACK_TIME); // takes 20ms to transmit
     radio.send(PPMTRAINERID, (const void*)(&lastPPM), sizeof(lastPPM),false); // takes 5ms to transmit
-    // although loop is stoped, ISR is still reading and saving PPM received value
+    
+    #ifdef DEBUG    
     digitalWrite(DB_TXpin, LOW);
-
-#endif
+    #endif
+    
+    #endif  // #SEND_RADIO
 
   }
 }
@@ -255,15 +264,16 @@ void loop()
 bool switchState(bool* bvar )
 {
   if(*bvar == false) *bvar = true; else *bvar = false;
-  //*bvar = not(*bvar); // some times bvar value becomes currupted not sure why
 }
 
 void readPPM()
 {
-  static unsigned int PWM_len;
-  static unsigned int counter;
-  static byte channel;        // for 8 channel system
-    
+  #ifdef DEBUG
+     // debug if passing this point echo on DB_CHRDpinn
+    switchState(&DB_CHRDstatus); 
+    digitalWrite(DB_CHRDpin,DB_CHRDstatus); 
+  #endif
+  
   counter = TCNT1;  // record how many cycle have passed since last timer reset
             // TCNT1 is the timer internal count register incremented
             // every CPU clock cycle divide by 8 (TCCR1B divider = 8)
@@ -272,41 +282,30 @@ void readPPM()
   PWM_len = (unsigned) counter/MULTIPLIER; // convert counter do us
   TCNT1 = 0;      // reset timer
 
-    // debug if passing this point echo on DB_CHRDpinn
-    //switchState(&DB_CHRDstatus); 
-    //digitalWrite(DB_CHRDpin,DB_CHRDstatus);
-    //Serial.print("*");
-
-
-
   if (PWM_len > 2500 ) //sync pulses over 1910us
   {
     channel = 0;
-
-    // switch DB_TXpin on every input pin change
-    switchState(&DB_TXstate);
-
   
   }
+  
   //servo values between 0us and 2500us will end up here
   else   // only count pulse width on falling edge
   {
-    
-    if(channel == 0) switchState(&DB_TXstate);
-    
+        
     // unexpected channel debug code 
-    if (channel - PPM_numChn >0)
+    if (channel > PPM_numChn -1)
     {
-
+      #ifdef DEBUG
       Serial.print("channel:");Serial.println(channel);
       Serial.print("PWM:");Serial.println(ppm.PWM[channel]);
+      #endif
     }
     else  // for expected channel, save value to array 
     {
       ppm.PWM[channel] = PWM_len;
+
     }
-        
-    channelREAD = channel + 1;
+       
     lastPPM = ppm;
 
     channel++;
