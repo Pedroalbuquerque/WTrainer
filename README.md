@@ -1,7 +1,7 @@
 #Wtrainer
 
 
-Trainer stands for Wireless Trainer  .
+WTrainer stands for Wireless Trainer  .
 
 In order to help a new pilot to fly an RC model, two RC radios can be connected so that the trainer can help the noob in an emergency by taking control and giving back after recovery.
 
